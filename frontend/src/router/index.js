@@ -5,12 +5,32 @@ import SimulationView from '../views/SimulationView.vue'
 import SimulationRunView from '../views/SimulationRunView.vue'
 import ReportView from '../views/ReportView.vue'
 import InteractionView from '../views/InteractionView.vue'
+import CohortSetupView from '../views/CohortSetupView.vue'
+import CohortResultView from '../views/CohortResultView.vue'
+import CohortRunView from '../views/CohortRunView.vue'
 
 const routes = [
   {
     path: '/',
     name: 'Home',
     component: Home
+  },
+  {
+    path: '/cohort-setup',
+    name: 'CohortSetup',
+    component: CohortSetupView
+  },
+  {
+    path: '/cohort/:simulationId',
+    name: 'CohortResult',
+    component: CohortResultView,
+    props: true
+  },
+  {
+    path: '/cohort/:simulationId/run',
+    name: 'CohortRun',
+    component: CohortRunView,
+    props: true
   },
   {
     path: '/process/:projectId',

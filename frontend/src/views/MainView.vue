@@ -184,6 +184,28 @@ const handleGoBack = () => {
 
 const initProject = async () => {
   addLog('Project view initialized.')
+
+  // Guard sincrónico: project_id con prefix 'caba-cohort-' es del flujo cohort.
+  // Redirigir a /cohort/<sim_id> sin pegarle a /api/graph/<project_id> que
+  // devolvería 404 (esos projects son placeholders, no existen en Zep).
+  const pid = currentProjectId.value || ''
+  if (pid.startsWith('caba-cohort-')) {
+    try {
+      const { getSimulationHistory } = await import('../api/simulation')
+      const res = await getSimulationHistory(50)
+      const match = (res?.data?.history || res?.data || []).find(
+        s => s.project_id === pid
+      )
+      if (match?.simulation_id) {
+        router.replace({ name: 'CohortResult', params: { simulationId: match.simulation_id } })
+        return
+      }
+    } catch (e) { /* fallback al flujo normal */ }
+    // Sin match: volver al home
+    router.replace({ name: 'Home' })
+    return
+  }
+
   if (currentProjectId.value === 'new') {
     await handleNewProject()
   } else {

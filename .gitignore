@@ -58,3 +58,17 @@ backend/uploads/
 
 # Docker 数据
 data/
+# Pero SÍ incluir los datos empaquetados del módulo caba_cohort (~16 MB)
+# Necesarios para que el backend corra out-of-the-box tras clone.
+!backend/app/services/caba_cohort/data/
+!backend/app/services/caba_cohort/data/*
+
+# Research data (Fase 0 exploration) - NO se suben al repo
+research/*/data/
+research/*/.venv/
+research/**/__pycache__/
+research/**/.ipynb_checkpoints/
+
+# Backups
+*.bak
+*.orig

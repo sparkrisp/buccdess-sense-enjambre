@@ -1,0 +1,15 @@
+[project]
+name = "mirofish-fase0"
+version = "0.0.1"
+description = "Fase 0 — Reconocimiento de datos electorales/demográficos CABA 2023"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2.0",
+    "requests>=2.31.0",
+    "jupyter>=1.0.0",
+    "matplotlib>=3.8.0",
+    "openpyxl>=3.1.0",
+    "python-dotenv>=1.0.0",
+    "openai>=1.0.0",
+    "trafilatura>=1.12.0",
+]

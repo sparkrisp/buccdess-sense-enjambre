@@ -212,6 +212,15 @@ const loadSimulationData = async () => {
     const simRes = await getSimulation(currentSimulationId.value)
     if (simRes.success && simRes.data) {
       const simData = simRes.data
+
+      // CABA cohort guard: si es cohort, redirigir a la vista cohort-specific
+      const isCohort = (simData.entity_types || []).includes('caba_electoral_cohort_2023')
+        || (simData.graph_id === 'caba-cohort-no-zep')
+        || (simData.project_id || '').startsWith('caba-cohort-')
+      if (isCohort) {
+        router.replace({ name: 'CohortRun', params: { simulationId: currentSimulationId.value } })
+        return
+      }
       
       // 获取 simulation config 以获取 minutes_per_round
       try {

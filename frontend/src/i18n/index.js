@@ -14,12 +14,17 @@ for (const path in localeFiles) {
   }
 }
 
-const savedLocale = localStorage.getItem('locale') || 'zh'
+let savedLocale = localStorage.getItem('locale') || 'es'
+// Migracion: usuarios con 'zh' guardado de antes deben pasar a 'es' (rebrand)
+if (savedLocale === 'zh') {
+  savedLocale = 'es'
+  localStorage.setItem('locale', 'es')
+}
 
 const i18n = createI18n({
   legacy: false,
   locale: savedLocale,
-  fallbackLocale: 'zh',
+  fallbackLocale: 'es',
   messages
 })
 

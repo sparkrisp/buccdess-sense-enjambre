@@ -235,7 +235,9 @@ class SimulationManager:
         defined_entity_types: Optional[List[str]] = None,
         use_llm_for_profiles: bool = True,
         progress_callback: Optional[callable] = None,
-        parallel_profile_count: int = 3
+        parallel_profile_count: int = 3,
+        profile_source: str = "zep",
+        cohort_config: Optional[Dict[str, Any]] = None,
     ) -> SimulationState:
         """
         准备模拟环境（全程自动化）
@@ -262,17 +264,26 @@ class SimulationManager:
         state = self._load_simulation_state(simulation_id)
         if not state:
             raise ValueError(f"模拟不存在: {simulation_id}")
-        
+
+        # Dispatch a caminos alternativos segun profile_source.
+        if profile_source == "caba_cohort_2023":
+            return self._prepare_from_caba_cohort(
+                state=state,
+                simulation_requirement=simulation_requirement,
+                cohort_config=cohort_config or {},
+                progress_callback=progress_callback,
+            )
+
         try:
             state.status = SimulationStatus.PREPARING
             self._save_simulation_state(state)
-            
+
             sim_dir = self._get_simulation_dir(simulation_id)
-            
+
             # ========== 阶段1: 读取并过滤实体 ==========
             if progress_callback:
                 progress_callback("reading", 0, t('progress.connectingZepGraph'))
-            
+
             reader = ZepEntityReader()
             
             if progress_callback:
@@ -456,6 +467,244 @@ class SimulationManager:
             self._save_simulation_state(state)
             raise
     
+    @staticmethod
+    def compute_cohort_hash(simulation_requirement: str, cohort_config: Dict[str, Any]) -> str:
+        """Hash deterministico del artículo + filtros para detectar duplicados."""
+        import hashlib
+        # Normalizar cohort_config: ordenar keys, listas estables
+        normalized = {k: cohort_config.get(k) for k in sorted(cohort_config.keys())}
+        if isinstance(normalized.get("comuna"), list):
+            normalized["comuna"] = sorted(normalized["comuna"])
+        key = json.dumps({
+            "req": (simulation_requirement or "").strip(),
+            "cfg": normalized,
+        }, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+    def find_cohort_by_hash(self, cohort_hash: str) -> Optional[str]:
+        """Busca una simulacion cohort existente por hash. Devuelve simulation_id o None."""
+        if not os.path.exists(self.SIMULATION_DATA_DIR):
+            return None
+        for sim_id in os.listdir(self.SIMULATION_DATA_DIR):
+            meta_path = os.path.join(self.SIMULATION_DATA_DIR, sim_id, "cohort_meta.json")
+            if not os.path.exists(meta_path):
+                continue
+            try:
+                with open(meta_path, encoding="utf-8") as f:
+                    meta = json.load(f)
+                if meta.get("cohort_hash") == cohort_hash:
+                    return sim_id
+            except Exception:
+                continue
+        return None
+
+    def list_cohort_simulations(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Lista todas las simulaciones que son cohortes CABA, ordenadas desc por created_at."""
+        results: List[Dict[str, Any]] = []
+        if not os.path.exists(self.SIMULATION_DATA_DIR):
+            return results
+        for sim_id in os.listdir(self.SIMULATION_DATA_DIR):
+            meta_path = os.path.join(self.SIMULATION_DATA_DIR, sim_id, "cohort_meta.json")
+            if not os.path.exists(meta_path):
+                continue
+            try:
+                with open(meta_path, encoding="utf-8") as f:
+                    meta = json.load(f)
+                state = self._load_simulation_state(sim_id)
+                results.append({
+                    "simulation_id": sim_id,
+                    "created_at": meta.get("created_at", ""),
+                    "cohort_hash": meta.get("cohort_hash"),
+                    "simulation_requirement": meta.get("simulation_requirement", ""),
+                    "cohort_config": meta.get("cohort_config", {}),
+                    "profiles_count": state.profiles_count if state else 0,
+                    "status": state.status.value if state else "unknown",
+                })
+            except Exception as e:
+                logger.warning(f"Failed reading cohort_meta for {sim_id}: {e}")
+        results.sort(key=lambda r: r["created_at"], reverse=True)
+        return results[:limit]
+
+    def delete_simulation(self, simulation_id: str) -> bool:
+        """Elimina una simulación y todos sus archivos. Devuelve True si existía."""
+        sim_dir = os.path.join(self.SIMULATION_DATA_DIR, simulation_id)
+        if not os.path.exists(sim_dir):
+            return False
+        shutil.rmtree(sim_dir)
+        self._simulations.pop(simulation_id, None)
+        logger.info(f"Simulation eliminada: {simulation_id}")
+        return True
+
+    def _prepare_from_caba_cohort(
+        self,
+        state: SimulationState,
+        simulation_requirement: str,
+        cohort_config: Dict[str, Any],
+        progress_callback: Optional[callable] = None,
+    ) -> SimulationState:
+        """
+        Prepara una simulacion usando la cohorte electoral CABA 2023.
+
+        Bypasea Zep y el config-generator-LLM. Usa datos publicos (INDEC Censo 2022
+        + resultados DINE 2023) para sintetizar perfiles realistas del electorado
+        porteno. Genera config de simulacion con defaults razonables.
+
+        Args:
+            cohort_config: dict con n, comuna, edad_min, seed, cargo.
+        """
+        from .caba_cohort import CabaCohortSource, CohortConfig
+        from .oasis_profile_generator import OasisProfileGenerator
+        from .simulation_config_generator import (
+            SimulationParameters, TimeSimulationConfig, EventConfig,
+            AgentActivityConfig, PlatformConfig,
+        )
+
+        try:
+            state.status = SimulationStatus.PREPARING
+            self._save_simulation_state(state)
+
+            sim_dir = self._get_simulation_dir(state.simulation_id)
+
+            cfg = CohortConfig(
+                n=cohort_config.get("n", 500),
+                comuna=cohort_config.get("comuna"),
+                edad_min=cohort_config.get("edad_min", 18),
+                seed=cohort_config.get("seed"),
+                cargo=cohort_config.get("cargo", "JEF"),
+                use_ecological_inference=cohort_config.get("use_ecological_inference", False),
+            )
+
+            # ========== Fase 1: generar perfiles sinteticos ==========
+            if progress_callback:
+                progress_callback("generating_profiles", 0,
+                                  f"Sampleando {cfg.n} perfiles CABA 2023")
+
+            source = CabaCohortSource()
+
+            def cohort_progress(current, total, msg):
+                if progress_callback:
+                    progress_callback(
+                        "generating_profiles",
+                        int(current / total * 100),
+                        msg,
+                        current=current,
+                        total=total,
+                    )
+
+            profiles = source.generate_profiles(cfg, progress_callback=cohort_progress)
+            state.profiles_count = len(profiles)
+            state.entities_count = len(profiles)
+            state.entity_types = ["caba_electoral_cohort_2023"]
+
+            # ========== Fase 2: guardar profiles en formato OASIS ==========
+            # Reutilizamos el generator solo por sus metodos de guardado.
+            saver = OasisProfileGenerator.__new__(OasisProfileGenerator)
+            if state.enable_reddit:
+                saver._save_reddit_json(
+                    profiles=profiles,
+                    file_path=os.path.join(sim_dir, "reddit_profiles.json"),
+                )
+            if state.enable_twitter:
+                saver._save_twitter_csv(
+                    profiles=profiles,
+                    file_path=os.path.join(sim_dir, "twitter_profiles.csv"),
+                )
+
+            # ========== Fase 3: config default para OASIS ==========
+            if progress_callback:
+                progress_callback("generating_config", 50,
+                                  "Generando config default")
+
+            n = len(profiles)
+
+            # Generar un AgentActivityConfig por perfil (defaults razonables)
+            agent_configs = [
+                AgentActivityConfig(
+                    agent_id=p.user_id,
+                    entity_uuid=p.source_entity_uuid or f"caba-{p.user_id}",
+                    entity_name=p.name,
+                    entity_type="caba_electoral_cohort_2023",
+                )
+                for p in profiles
+            ]
+
+            time_cfg = TimeSimulationConfig(
+                total_simulation_hours=72,
+                agents_per_hour_min=max(1, n // 15),
+                agents_per_hour_max=max(5, n // 5),
+            )
+
+            event_cfg = EventConfig(
+                initial_posts=[{
+                    "poster_agent_id": 0,
+                    "content": simulation_requirement,
+                    "timestamp": "round_1",
+                }],
+                hot_topics=["CABA", "politica argentina", "elecciones"],
+                narrative_direction=simulation_requirement[:200],
+            )
+
+            config = SimulationParameters(
+                simulation_id=state.simulation_id,
+                project_id=state.project_id,
+                graph_id=state.graph_id,
+                simulation_requirement=simulation_requirement,
+                time_config=time_cfg,
+                agent_configs=agent_configs,
+                event_config=event_cfg,
+                twitter_config=PlatformConfig(platform="twitter") if state.enable_twitter else None,
+                reddit_config=PlatformConfig(platform="reddit") if state.enable_reddit else None,
+                llm_model=Config.LLM_MODEL_NAME,
+                llm_base_url=Config.LLM_BASE_URL,
+                generation_reasoning=(
+                    f"Cohorte electoral CABA 2023 ({n} agentes). "
+                    f"Filtros: comuna={cfg.comuna}, edad_min={cfg.edad_min}, cargo={cfg.cargo}. "
+                    f"Fuente: INDEC Censo 2022 + DINE Generales 2023. "
+                    f"Config default sin LLM, tuneable manualmente."
+                ),
+            )
+
+            config_path = os.path.join(sim_dir, "simulation_config.json")
+            with open(config_path, 'w', encoding='utf-8') as f:
+                f.write(config.to_json())
+
+            state.config_generated = True
+            state.config_reasoning = config.generation_reasoning
+            state.status = SimulationStatus.READY
+            self._save_simulation_state(state)
+
+            # Guardar metadata de cohorte (hash + filtros + snippet) para historial y dedup
+            cohort_hash = self.compute_cohort_hash(simulation_requirement, cohort_config)
+            meta_path = os.path.join(sim_dir, "cohort_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "source": "caba_electoral_cohort_2023",
+                    "cohort_hash": cohort_hash,
+                    "simulation_requirement": simulation_requirement,
+                    "cohort_config": cohort_config,
+                    "created_at": state.created_at,
+                    "profiles_count": n,
+                }, f, ensure_ascii=False, indent=2)
+
+            if progress_callback:
+                progress_callback("generating_config", 100,
+                                  f"Listo: {n} perfiles cohorte CABA")
+
+            logger.info(
+                f"CABA cohort simulation ready: {state.simulation_id}, "
+                f"profiles={n}, comuna={cfg.comuna}, seed={cfg.seed}, hash={cohort_hash}"
+            )
+            return state
+
+        except Exception as e:
+            logger.error(f"CABA cohort prepare failed: {state.simulation_id}, {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            state.status = SimulationStatus.FAILED
+            state.error = str(e)
+            self._save_simulation_state(state)
+            raise
+
     def get_simulation(self, simulation_id: str) -> Optional[SimulationState]:
         """获取模拟状态"""
         return self._load_simulation_state(simulation_id)

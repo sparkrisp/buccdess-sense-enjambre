@@ -403,26 +403,38 @@ const closeModal = () => {
   selectedProject.value = null
 }
 
+// Detectar si es cohort CABA (entity_types o prefijo en project_id)
+const isCohort = (proj) => {
+  if (!proj) return false
+  const types = proj.entity_types || []
+  if (types.includes('caba_electoral_cohort_2023')) return true
+  if ((proj.project_id || '').startsWith('caba-cohort-')) return true
+  if (proj.graph_id === 'caba-cohort-no-zep') return true
+  return false
+}
+
 // 导航到图谱构建页面（Project）
 const goToProject = () => {
-  if (selectedProject.value?.project_id) {
-    router.push({
-      name: 'Process',
-      params: { projectId: selectedProject.value.project_id }
-    })
+  const proj = selectedProject.value
+  if (!proj) return
+  if (isCohort(proj) && proj.simulation_id) {
+    router.push({ name: 'CohortResult', params: { simulationId: proj.simulation_id } })
+    closeModal()
+    return
+  }
+  if (proj.project_id) {
+    router.push({ name: 'Process', params: { projectId: proj.project_id } })
     closeModal()
   }
 }
 
 // 导航到环境配置页面（Simulation）
 const goToSimulation = () => {
-  if (selectedProject.value?.simulation_id) {
-    router.push({
-      name: 'Simulation',
-      params: { simulationId: selectedProject.value.simulation_id }
-    })
-    closeModal()
-  }
+  const proj = selectedProject.value
+  if (!proj?.simulation_id) return
+  const target = isCohort(proj) ? 'CohortResult' : 'Simulation'
+  router.push({ name: target, params: { simulationId: proj.simulation_id } })
+  closeModal()
 }
 
 // 导航到分析报告页面（Report）

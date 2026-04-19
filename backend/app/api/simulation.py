@@ -639,6 +639,366 @@ def prepare_simulation():
         }), 500
 
 
+@simulation_bp.route('/prepare-from-cohort', methods=['POST'])
+def prepare_from_cohort():
+    """
+    Prepara una simulacion usando la cohorte electoral CABA 2023.
+
+    Alternativa al /prepare tradicional. NO requiere Zep graph, NO requiere
+    documento uploadeado, NO llama a LLM para config. Genera perfiles sinteticos
+    con distribucion real (Censo 2022 + Generales 2023).
+
+    Request (JSON):
+        {
+            "simulation_id": "sim_xxxx",      // required
+            "simulation_requirement": "...",  // required: la medida/evento a simular
+            "cohort_config": {                // optional
+                "n": 500,                     // cantidad de agentes (default 500)
+                "comuna": [2, 13, 14],        // list o int, filtro geografico
+                "edad_min": 18,               // edad minima
+                "seed": 42,                   // reproducibilidad
+                "cargo": "JEF"                // JEF | LEG | COM
+            }
+        }
+    """
+    from datetime import datetime
+
+    try:
+        data = request.get_json() or {}
+
+        simulation_requirement = data.get("simulation_requirement")
+        if not simulation_requirement:
+            return jsonify({
+                "success": False,
+                "error": "simulation_requirement requerido (describir la medida/evento)"
+            }), 400
+
+        cohort_config = data.get("cohort_config", {}) or {}
+        simulation_id = data.get("simulation_id")
+        force_new = data.get("force_new", False)
+
+        manager = SimulationManager()
+
+        # Dedup: chequear si ya existe una cohorte con mismo hash (artículo + filtros)
+        if not simulation_id and not force_new:
+            cohort_hash = SimulationManager.compute_cohort_hash(
+                simulation_requirement, cohort_config
+            )
+            existing_id = manager.find_cohort_by_hash(cohort_hash)
+            if existing_id:
+                existing_state = manager.get_simulation(existing_id)
+                return jsonify({
+                    "success": True,
+                    "data": {
+                        "simulation_id": existing_id,
+                        "status": existing_state.status.value if existing_state else "ready",
+                        "profiles_count": existing_state.profiles_count if existing_state else 0,
+                        "source": "caba_electoral_cohort_2023",
+                        "cohort_hash": cohort_hash,
+                        "already_exists": True,
+                        "message": "Ya existe una simulación con mismo artículo y filtros.",
+                    }
+                })
+
+        # Si no viene simulation_id, crear uno nuevo (flujo cohort no necesita
+        # project/graph reales - usamos placeholders)
+        if not simulation_id:
+            project_id = data.get("project_id") or f"caba-cohort-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            state = manager.create_simulation(
+                project_id=project_id,
+                graph_id="caba-cohort-no-zep",
+                enable_twitter=data.get("enable_twitter", True),
+                enable_reddit=data.get("enable_reddit", True),
+            )
+            simulation_id = state.simulation_id
+        else:
+            state = manager.get_simulation(simulation_id)
+            if not state:
+                return jsonify({
+                    "success": False,
+                    "error": f"Simulacion no encontrada: {simulation_id}"
+                }), 404
+
+        # Sync (sampler es rapido: ~500 agentes en <5s sin LLM)
+        result_state = manager.prepare_simulation(
+            simulation_id=simulation_id,
+            simulation_requirement=simulation_requirement,
+            document_text="",  # no usado en flujo cohort
+            profile_source="caba_cohort_2023",
+            cohort_config=cohort_config,
+        )
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "simulation_id": simulation_id,
+                "status": result_state.status.value,
+                "profiles_count": result_state.profiles_count,
+                "entities_count": result_state.entities_count,
+                "entity_types": result_state.entity_types,
+                "config_generated": result_state.config_generated,
+                "source": "caba_electoral_cohort_2023",
+                "cohort_config": cohort_config,
+                "already_exists": False,
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"prepare_from_cohort fallo: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }), 500
+
+
+@simulation_bp.route('/cohort/<simulation_id>/chat', methods=['POST'])
+def cohort_agent_chat(simulation_id: str):
+    """
+    Chat directo con un agente de la cohorte (sin necesidad de OASIS corriendo).
+
+    Usa la persona del agente como system prompt + historial + nueva pregunta.
+    Devuelve la respuesta del LLM (Gemini).
+
+    Request JSON:
+        {
+            "agent_id": int,
+            "message": "¿Qué pensás del aumento del subte?",
+            "history": [{"role": "user"|"assistant", "content": "..."}, ...]  // opcional
+        }
+    """
+    try:
+        import os
+        import json as _json
+        from openai import OpenAI
+        from ..config import Config
+
+        data = request.get_json() or {}
+        agent_id = data.get("agent_id")
+        message = data.get("message", "").strip()
+        history = data.get("history", []) or []
+
+        if agent_id is None:
+            return jsonify({"success": False, "error": "agent_id requerido"}), 400
+        if not message:
+            return jsonify({"success": False, "error": "message requerido"}), 400
+
+        manager = SimulationManager()
+        sim_dir = manager._get_simulation_dir(simulation_id)
+        profiles_path = os.path.join(sim_dir, "reddit_profiles.json")
+        if not os.path.exists(profiles_path):
+            return jsonify({"success": False, "error": "Perfiles no encontrados"}), 404
+
+        with open(profiles_path, encoding="utf-8") as f:
+            profiles = _json.load(f)
+
+        profile = next((p for p in profiles if p.get("user_id") == agent_id), None)
+        if not profile:
+            return jsonify({"success": False, "error": f"Agent {agent_id} no encontrado"}), 404
+
+        # Intentar traer el artículo para darle contexto al agente
+        article = ""
+        for fname in ("cohort_meta.json", "simulation_config.json"):
+            p = os.path.join(sim_dir, fname)
+            if os.path.exists(p):
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        d = _json.load(f)
+                    article = d.get("simulation_requirement", "")
+                    if article:
+                        break
+                except Exception:
+                    continue
+
+        persona = profile.get("persona", "")
+        system_prompt = (
+            persona +
+            " Te están entrevistando. Respondé EN PRIMERA PERSONA con tu voz, "
+            "breve (1-3 oraciones), coloquial rioplatense (voseo), acorde a tu perfil. "
+            "NO rompas el personaje."
+        )
+        if article:
+            system_prompt += (
+                f"\n\nContexto (noticia/medida que conoces): {article[:1500]}"
+            )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for h in history[-10:]:  # últimos 10 turnos
+            role = h.get("role")
+            content = h.get("content", "")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message})
+
+        client = OpenAI(api_key=Config.LLM_API_KEY, base_url=Config.LLM_BASE_URL)
+        resp = client.chat.completions.create(
+            model=Config.LLM_MODEL_NAME,
+            messages=messages,
+            temperature=0.85,
+            max_tokens=500,
+            extra_body={"reasoning_effort": "none"},
+        )
+        reply = resp.choices[0].message.content
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "agent_id": agent_id,
+                "agent_name": profile.get("name"),
+                "message": message,
+                "reply": reply,
+            }
+        })
+    except Exception as e:
+        logger.error(f"cohort_agent_chat fallo: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e),
+        }), 500
+
+
+@simulation_bp.route('/cohort/<simulation_id>/ontology/build', methods=['POST'])
+def build_cohort_ontology(simulation_id: str):
+    """
+    Construye un grafo (ontología) del artículo asociado a la simulación cohorte.
+
+    Request (JSON):
+        { "source": "llm" | "zep", "force": bool }
+    """
+    try:
+        data = request.get_json() or {}
+        source = data.get("source", "llm")
+        force = data.get("force", False)
+
+        manager = SimulationManager()
+        sim_dir = manager._get_simulation_dir(simulation_id)
+
+        # Resolver artículo: preferir cohort_meta.json, fallback a simulation_config.json
+        import os
+        import json as _json
+        article = ""
+        meta_path = os.path.join(sim_dir, "cohort_meta.json")
+        if os.path.exists(meta_path):
+            with open(meta_path, encoding="utf-8") as f:
+                meta = _json.load(f)
+            article = meta.get("simulation_requirement", "")
+
+        if not article.strip():
+            # Fallback: leer del simulation_config.json (siempre existe si la sim está ready)
+            config_path = os.path.join(sim_dir, "simulation_config.json")
+            if os.path.exists(config_path):
+                with open(config_path, encoding="utf-8") as f:
+                    cfg = _json.load(f)
+                article = cfg.get("simulation_requirement", "") or ""
+                # Si pudimos recuperar, crear cohort_meta.json al vuelo para futuras llamadas
+                if article.strip() and not os.path.exists(meta_path):
+                    state = manager.get_simulation(simulation_id)
+                    try:
+                        with open(meta_path, "w", encoding="utf-8") as mf:
+                            _json.dump({
+                                "source": "caba_electoral_cohort_2023",
+                                "cohort_hash": "legacy-migrated",
+                                "simulation_requirement": article,
+                                "cohort_config": {},
+                                "created_at": state.created_at if state else "",
+                                "profiles_count": state.profiles_count if state else 0,
+                            }, mf, ensure_ascii=False, indent=2)
+                        logger.info(f"Migrated cohort_meta.json para {simulation_id}")
+                    except Exception as e:
+                        logger.warning(f"Fallo migrando meta para {simulation_id}: {e}")
+
+        if not article.strip():
+            return jsonify({
+                "success": False,
+                "error": "No se encontró el artículo/medida asociada (ni cohort_meta.json ni simulation_config.json lo tienen)"
+            }), 404
+
+        # Check cache
+        ontology_path = os.path.join(sim_dir, f"article_ontology_{source}.json")
+        if os.path.exists(ontology_path) and not force:
+            with open(ontology_path, encoding="utf-8") as f:
+                return jsonify({"success": True, "data": _json.load(f), "cached": True})
+
+        # Construir
+        if source == "llm":
+            from ..services.article_ontology import extract_ontology_from_article
+            ontology = extract_ontology_from_article(article)
+        elif source == "zep":
+            from ..services.zep_article_graph import extract_ontology_via_zep
+            ontology = extract_ontology_via_zep(article)
+        else:
+            return jsonify({"success": False, "error": f"source inválido: {source}"}), 400
+
+        # Guardar
+        with open(ontology_path, "w", encoding="utf-8") as f:
+            _json.dump(ontology, f, ensure_ascii=False, indent=2)
+
+        return jsonify({"success": True, "data": ontology, "cached": False})
+
+    except Exception as e:
+        logger.error(f"build_cohort_ontology fallo: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }), 500
+
+
+@simulation_bp.route('/cohort/<simulation_id>/ontology', methods=['GET'])
+def get_cohort_ontology(simulation_id: str):
+    """Devuelve las ontologías cacheadas de la simulación cohorte (LLM y/o Zep)."""
+    try:
+        import os
+        import json as _json
+        manager = SimulationManager()
+        sim_dir = manager._get_simulation_dir(simulation_id)
+
+        result = {"llm": None, "zep": None}
+        for source in ("llm", "zep"):
+            path = os.path.join(sim_dir, f"article_ontology_{source}.json")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    result[source] = _json.load(f)
+
+        return jsonify({"success": True, "data": result})
+    except Exception as e:
+        logger.error(f"get_cohort_ontology fallo: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@simulation_bp.route('/cohort-history', methods=['GET'])
+def cohort_history():
+    """Lista las simulaciones que son cohortes CABA (con metadata)."""
+    try:
+        limit = request.args.get("limit", 50, type=int)
+        manager = SimulationManager()
+        items = manager.list_cohort_simulations(limit=limit)
+        return jsonify({"success": True, "data": {"items": items, "count": len(items)}})
+    except Exception as e:
+        logger.error(f"cohort_history fallo: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@simulation_bp.route('/cohort/<simulation_id>', methods=['DELETE'])
+def delete_cohort_simulation(simulation_id: str):
+    """Elimina una simulación de cohorte (archivos + state)."""
+    try:
+        manager = SimulationManager()
+        deleted = manager.delete_simulation(simulation_id)
+        if not deleted:
+            return jsonify({"success": False, "error": "Simulación no encontrada"}), 404
+        return jsonify({"success": True, "data": {"deleted": simulation_id}})
+    except Exception as e:
+        logger.error(f"delete_cohort_simulation fallo: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @simulation_bp.route('/prepare/status', methods=['POST'])
 def get_prepare_status():
     """

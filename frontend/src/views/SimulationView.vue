@@ -91,6 +91,21 @@ const viewMode = ref('split')
 const currentSimulationId = ref(route.params.simulationId)
 const projectData = ref(null)
 const graphData = ref(null)
+
+// CABA cohort guard: al montar, si es cohort redirigir a la vista dedicada
+onMounted(async () => {
+  try {
+    const simRes = await getSimulation(currentSimulationId.value)
+    const simData = simRes?.data
+    if (!simData) return
+    const isCohort = (simData.entity_types || []).includes('caba_electoral_cohort_2023')
+      || simData.graph_id === 'caba-cohort-no-zep'
+      || (simData.project_id || '').startsWith('caba-cohort-')
+    if (isCohort) {
+      router.replace({ name: 'CohortResult', params: { simulationId: currentSimulationId.value } })
+    }
+  } catch (e) { /* silencioso */ }
+})
 const graphLoading = ref(false)
 const systemLogs = ref([])
 const currentStatus = ref('processing') // processing | completed | error

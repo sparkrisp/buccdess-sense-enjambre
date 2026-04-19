@@ -17,6 +17,63 @@ export const prepareSimulation = (data) => {
 }
 
 /**
+ * Prepare simulation desde cohorte electoral CABA 2023 (datos publicos).
+ * No requiere Zep/project/documento. Crea la simulacion automaticamente si no viene simulation_id.
+ * @param {Object} data
+ *   - simulation_requirement: string (la medida/evento a simular) [required]
+ *   - cohort_config: { n, comuna, edad_min, seed, cargo, use_ecological_inference }
+ *   - simulation_id?: string (si viene, reusa; si no, crea una nueva)
+ *   - project_id?: string (opcional, se genera automatico)
+ *   - enable_twitter?: bool
+ *   - enable_reddit?: bool
+ */
+export const prepareFromCohort = (data) => {
+  return service.post('/api/simulation/prepare-from-cohort', data)
+}
+
+/**
+ * Listar cohortes CABA guardadas (con metadata y dedup hash).
+ * @param {number} limit
+ */
+export const getCohortHistory = (limit = 50) => {
+  return service.get('/api/simulation/cohort-history', { params: { limit } })
+}
+
+/**
+ * Eliminar una simulación de cohorte (archivos + state).
+ * @param {string} simulationId
+ */
+export const deleteCohortSimulation = (simulationId) => {
+  return service.delete(`/api/simulation/cohort/${simulationId}`)
+}
+
+/**
+ * Construye la ontología del artículo asociado a una cohorte.
+ * @param {string} simulationId
+ * @param {'llm'|'zep'} source
+ * @param {boolean} force - bypass cache
+ */
+export const buildCohortOntology = (simulationId, source = 'llm', force = false) => {
+  return service.post(`/api/simulation/cohort/${simulationId}/ontology/build`, { source, force })
+}
+
+/**
+ * Obtiene ambas ontologías cacheadas (LLM y Zep si existen).
+ */
+export const getCohortOntology = (simulationId) => {
+  return service.get(`/api/simulation/cohort/${simulationId}/ontology`)
+}
+
+/**
+ * Chat directo con un agente de la cohorte (sin OASIS corriendo).
+ * @param {string} simulationId
+ * @param {Object} data - { agent_id, message, history? }
+ */
+export const chatWithCohortAgent = (simulationId, data) => {
+  return service.post(`/api/simulation/cohort/${simulationId}/chat`, data)
+}
+
+/**
  * 查询准备任务进度
  * @param {Object} data - { task_id?, simulation_id? }
  */

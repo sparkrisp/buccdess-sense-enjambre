@@ -2,8 +2,11 @@
   <div class="home-container">
     <!-- 顶部导航栏 -->
     <nav class="navbar">
-      <div class="nav-brand">MIROFISH</div>
+      <div class="nav-brand">BUCCDESS SENSE <span class="nav-sub">— Enjambre</span></div>
       <div class="nav-links">
+        <button class="cohort-link" @click="goToCohort" title="Cohorte electoral CABA 2023">
+          🇦🇷 CABA cohort <span class="arrow">→</span>
+        </button>
         <LanguageSwitcher />
         <a href="https://github.com/666ghj/MiroFish" target="_blank" class="github-link">
           {{ $t('nav.visitGithub') }} <span class="arrow">↗</span>
@@ -42,11 +45,49 @@
         </div>
         
         <div class="hero-right">
-          <!-- Logo 区域 -->
+          <!-- Logo: SVG de enjambre generativo -->
           <div class="logo-container">
-            <img src="../assets/logo/MiroFish_logo_left.jpeg" alt="MiroFish Logo" class="hero-logo" />
+            <div class="swarm-logo" aria-label="Buccdess Sense Enjambre">
+              <svg viewBox="0 0 400 400" class="swarm-svg" xmlns="http://www.w3.org/2000/svg">
+                <!-- Lineas de conexion del enjambre -->
+                <g stroke="#FF4500" stroke-width="1" opacity="0.25" fill="none">
+                  <line x1="200" y1="200" x2="120" y2="90" />
+                  <line x1="200" y1="200" x2="290" y2="100" />
+                  <line x1="200" y1="200" x2="310" y2="220" />
+                  <line x1="200" y1="200" x2="260" y2="320" />
+                  <line x1="200" y1="200" x2="110" y2="300" />
+                  <line x1="200" y1="200" x2="80" y2="180" />
+                  <line x1="120" y1="90" x2="290" y2="100" />
+                  <line x1="290" y1="100" x2="310" y2="220" />
+                  <line x1="310" y1="220" x2="260" y2="320" />
+                  <line x1="260" y1="320" x2="110" y2="300" />
+                  <line x1="110" y1="300" x2="80" y2="180" />
+                  <line x1="80" y1="180" x2="120" y2="90" />
+                </g>
+                <!-- Nodos del enjambre -->
+                <circle cx="200" cy="200" r="18" fill="#000" />
+                <circle cx="120" cy="90" r="10" fill="#FF4500" />
+                <circle cx="290" cy="100" r="8" fill="#FF4500" />
+                <circle cx="310" cy="220" r="12" fill="#000" />
+                <circle cx="260" cy="320" r="9" fill="#FF4500" />
+                <circle cx="110" cy="300" r="11" fill="#000" />
+                <circle cx="80" cy="180" r="8" fill="#FF4500" />
+                <!-- Nodos secundarios (satelites) -->
+                <circle cx="170" cy="70" r="4" fill="#000" opacity="0.6" />
+                <circle cx="340" cy="160" r="5" fill="#000" opacity="0.6" />
+                <circle cx="200" cy="360" r="4" fill="#000" opacity="0.6" />
+                <circle cx="40" cy="240" r="5" fill="#000" opacity="0.6" />
+                <circle cx="230" cy="150" r="3" fill="#FF4500" opacity="0.5" />
+                <circle cx="160" cy="240" r="3" fill="#FF4500" opacity="0.5" />
+                <circle cx="260" cy="180" r="3" fill="#FF4500" opacity="0.5" />
+              </svg>
+              <div class="swarm-label">
+                <div class="swarm-title">BUCCDESS SENSE</div>
+                <div class="swarm-subtitle">— Enjambre —</div>
+              </div>
+            </div>
           </div>
-          
+
           <button class="scroll-down-btn" @click="scrollToBottom">
             ↓
           </button>
@@ -294,6 +335,11 @@ const scrollToBottom = () => {
   })
 }
 
+// Cohorte electoral CABA
+const goToCohort = () => {
+  router.push({ name: 'CohortSetup' })
+}
+
 // 开始模拟 - 立即跳转，API调用在Process页面进行
 const startSimulation = () => {
   if (!canSubmit.value || loading.value) return
@@ -352,6 +398,16 @@ const startSimulation = () => {
   font-weight: 800;
   letter-spacing: 1px;
   font-size: 1.2rem;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.nav-sub {
+  font-weight: 400;
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+  color: #FF4500;
 }
 
 .nav-links {
@@ -374,6 +430,26 @@ const startSimulation = () => {
 
 .github-link:hover {
   opacity: 0.8;
+}
+
+.cohort-link {
+  background: var(--orange);
+  color: var(--white);
+  border: none;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cohort-link:hover {
+  background: #FF6A33;
 }
 
 .arrow {
@@ -517,9 +593,44 @@ const startSimulation = () => {
   padding-right: 40px;
 }
 
-.hero-logo {
-  max-width: 500px; /* 调整logo大小 */
+.swarm-logo {
+  max-width: 500px;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.swarm-svg {
+  width: 100%;
+  max-width: 400px;
+  height: auto;
+  animation: swarm-pulse 6s ease-in-out infinite;
+}
+
+@keyframes swarm-pulse {
+  0%, 100% { opacity: 0.92; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); }
+}
+
+.swarm-label {
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.swarm-title {
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--black);
+}
+
+.swarm-subtitle {
+  font-size: 0.9rem;
+  letter-spacing: 4px;
+  color: var(--orange);
+  margin-top: 4px;
 }
 
 .scroll-down-btn {
