@@ -87,12 +87,15 @@ ZEP_API_KEY=<opcional, para flujo Zep>
 
 ## Documentación
 
-- [`ARQUITECTURA.md`](./ARQUITECTURA.md) — diseño técnico completo:
+- 🚀 [`GETTING_STARTED.md`](./GETTING_STARTED.md) — **empezá acá** si es tu
+  primer clone. Guía paso a paso: instalación, API keys, primer run,
+  uso end-to-end, troubleshooting, rotación de keys, git workflow.
+- 🏗 [`ARQUITECTURA.md`](./ARQUITECTURA.md) — diseño técnico completo:
   componentes, flujos, endpoints, ADRs, seguridad, extensión.
-- [`research/fase0/DOCUMENTACION.md`](./research/fase0/DOCUMENTACION.md)
+- 📘 [`research/fase0/DOCUMENTACION.md`](./research/fase0/DOCUMENTACION.md)
   — pipeline completo del módulo cohort: fases 0/1/2/B/C, sampler,
-  Ecological Inference, validaciones, costos, limitaciones, ética.
-- [`MIROFISH_UPSTREAM.md`](./MIROFISH_UPSTREAM.md) — README original de
+  Ecological Inference, validaciones, costos, limitaciones, ética (1200+ líneas).
+- 📎 [`MIROFISH_UPSTREAM.md`](./MIROFISH_UPSTREAM.md) — README original de
   MiroFish (preservado por atribución).
 
 ---
